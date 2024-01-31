@@ -1,5 +1,5 @@
 [package]
-name = "postgres-docker-utils"
+name = "docker-db"
 version = "0.1.0"
 edition = "2021"
 publish = false
