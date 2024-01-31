@@ -2,7 +2,16 @@ use std::net::SocketAddr;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use anyhow::Context;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Command output was invalid format (non utf-8)")]
+    InvalidOutput,
+
+    #[error("Failed to parse exposed ports, is your docker daemon running?")]
+    FailedToParsePorts,
+}
 
 pub struct Postgres {
     container_id: String,
@@ -16,14 +25,13 @@ impl Postgres {
     ///
     /// Note that we're using sync code here so we'll block the executor - but only for a short moment
     /// as the container will run in the background.
-    pub async fn spawn() -> anyhow::Result<Self> {
+    pub async fn spawn() -> Result<Self, Error> {
         let container_id = run_cmd_to_output(
             "docker run --rm -d -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432 postgres",
-        )
-        .context("Starting the Postgres container")?;
+        )?;
 
-        let exposed_port = run_cmd_to_output(&format!("docker container port {container_id} 5432"))
-            .context("Fetching container exposed port")?;
+        let exposed_port =
+            run_cmd_to_output(&format!("docker container port {container_id} 5432"))?;
         let socket_addr = parse_exposed_port(&exposed_port)?;
 
         // TODO: Properly wait for postgres to be ready
@@ -57,7 +65,7 @@ impl Drop for Postgres {
     }
 }
 
-fn run_cmd_to_output(cmd_str: &str) -> anyhow::Result<String> {
+fn run_cmd_to_output(cmd_str: &str) -> Result<String, Error> {
     let args: Vec<_> = cmd_str.split(' ').collect();
     let mut command = Command::new(args[0]);
 
@@ -72,18 +80,21 @@ fn run_cmd_to_output(cmd_str: &str) -> anyhow::Result<String> {
         return Ok(String::new());
     };
 
-    let utf = String::from_utf8(output.stdout)?;
+    let utf = String::from_utf8(output.stdout).map_err(|err| {
+        eprintln!("Failed to parse command output: {}", err);
+        Error::InvalidOutput
+    })?;
 
     Ok(utf.trim().to_string())
 }
 
-fn run_cmd(cmd_str: &str) -> anyhow::Result<()> {
+fn run_cmd(cmd_str: &str) -> Result<(), Error> {
     run_cmd_to_output(cmd_str)?;
 
     Ok(())
 }
 
-fn parse_exposed_port(s: &str) -> anyhow::Result<SocketAddr> {
+fn parse_exposed_port(s: &str) -> Result<SocketAddr, Error> {
     let parts: Vec<_> = s
         .split_whitespace()
         .map(|s| s.trim())
@@ -92,9 +103,14 @@ fn parse_exposed_port(s: &str) -> anyhow::Result<SocketAddr> {
 
     Ok(parts
         .iter()
-        .map(|p| p.parse::<SocketAddr>())
+        .map(|p| {
+            p.parse::<SocketAddr>().map_err(|err| {
+                eprintln!("Failed to parse socket addr: {}", err);
+                Error::FailedToParsePorts
+            })
+        })
         .next()
-        .context("Missing exposed port, is your docker daemon running?")??)
+        .ok_or(Error::FailedToParsePorts)??)
 }
 
 #[cfg(test)]

@@ -5,7 +5,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = "1.0"
 test-case = "3.1.0"
 thiserror = "1.0.56"
 tokio = { version = "1.0", features = ["full"] }
